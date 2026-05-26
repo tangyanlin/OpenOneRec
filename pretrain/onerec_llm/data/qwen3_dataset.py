@@ -498,6 +498,11 @@ class Qwen3ChatCompletionDataset(IterableDataset):
         while True:
             try:
                 sample = next(ds_iter)
+            except StopIteration:
+                # No more samples, flush remaining buffer and exit
+                break
+            
+            try:
                 sample_key = sample["__key__"] if "__key__" in sample else ""
                 sample_url = sample["__url__"] if "__url__" in sample else ""
 
@@ -511,15 +516,20 @@ class Qwen3ChatCompletionDataset(IterableDataset):
             
                 inputs = self._process(sample, source_name)
             except Exception:
-                self.source_error_cnt.setdefault(source_name, 0)
-                self.source_error_cnt[source_name] += 1
-                error_ratio = self.source_error_cnt[source_name] * 1.0 / \
-                    self.source_sample_cnt[source_name]
+                # source_name may not be defined if exception occurred before line 505
+                err_source_name = source_name if 'source_name' in dir() else "Unknown"
+                self.source_error_cnt.setdefault(err_source_name, 0)
+                self.source_error_cnt[err_source_name] += 1
+                sample_cnt = self.source_sample_cnt.get(err_source_name, 0)
+                error_ratio = self.source_error_cnt[err_source_name] * 1.0 / sample_cnt if sample_cnt > 0 else 0.0
                 
                 rank, world_size, worker, num_workers = pytorch_worker_info()
+                err_sample_key = sample_key if 'sample_key' in dir() else ""
+                err_sample_url = sample_url if 'sample_url' in dir() else ""
+                err_sample_str = str(sample)[:50] if 'sample' in dir() else "N/A"
                 logger.error(
                     f"Qwen3ChatCompletionDataset process sample error. worker=r{rank}_w{worker}"
-                    f"{source_name=}, {error_ratio=}, {sample_key=}, {sample_url=}, sample=\n{str(sample)[:50]}"
+                    f"{err_source_name=}, {error_ratio=}, {err_sample_key=}, {err_sample_url=}, sample=\n{err_sample_str}"
                     f"errmsg={traceback.format_exc()}")
                 continue
 
@@ -555,6 +565,16 @@ class Qwen3ChatCompletionDataset(IterableDataset):
                 buffer.append(inputs)
                 source_list.append(source_name)
                 cur_length += sample_length
+        
+        # Flush remaining buffer after iteration ends
+        if buffer:
+            try:
+                packed_inputs = self._packing(buffer)
+                packed_inputs["data_source"] = source_list
+                if packed_inputs["loss_mask"].sum() > 0:
+                    yield packed_inputs
+            except Exception as e:
+                logger.warning(f"Failed to flush buffer: {e}")
 
 class Qwen3NaiveParquetDataset(IterableDataset):
     """Naive parquet dataset for Qwen3 that handles file reading and parsing."""
@@ -630,7 +650,7 @@ class Qwen3NaiveParquetDataset(IterableDataset):
         def get_sample():
             for fn_index, (fn, epoch_idx) in enumerate(fn_list):
                 try:
-                    df = load_parquet_file(fn).read_row_group(0).to_pandas()
+                    df = load_parquet_file(fn, parquet_backend='pyarrow').read_row_group(0).to_pandas()
                 except Exception as e:
                     logger.warning(
                         f"ParquetDataset Info: {rank=}, {world_size=}, {worker=}, {num_workers=}, {fn} failed" + \
@@ -714,10 +734,16 @@ class Qwen3ChatCompletionParquetDataset(Qwen3ChatCompletionDataset):
                 with open(sources, "r") as fp:
                     data_files = json.loads(fp.read())
                     data_files = [fn for fn in data_files if fn.endswith(".parquet")]
+            elif isinstance(sources, str) and sources.endswith(".parquet"):
+                # Direct parquet file path
+                data_files = [sources]
             elif isinstance(sources, list):
                 for source in sources:
-                    hdfs_files = shell_hdfs_ls(source)
-                    data_files += [fn for fn in hdfs_files if fn.endswith(".parquet")]
+                    if source.endswith(".parquet"):
+                        data_files.append(source)
+                    else:
+                        hdfs_files = shell_hdfs_ls(source)
+                        data_files += [fn for fn in hdfs_files if fn.endswith(".parquet")]
             # repeat
             for i in range(self.num_epochs):
                 data_files.sort()

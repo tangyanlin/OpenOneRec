@@ -234,8 +234,8 @@ def get_argument_parser() -> argparse.ArgumentParser:
                        help="Model class name")
     
     # Dataset arguments
-    parser.add_argument("--dataset_config", type=str, default=None,
-                       help="Path to dataset configuration JSON file")
+    parser.add_argument("--data_path", type=str, default=None,
+                       help="Direct path to training data (parquet files or directory)")
     parser.add_argument("--max_length", type=int, default=None,
                        help="Max tokens per sentence")
     parser.add_argument("--minibatch_size", type=int, default=4096,
@@ -436,8 +436,9 @@ def initialize_distributed() -> Tuple[int, int, int]:
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
     torch.cuda.set_device(local_rank)
+    # Use Gloo backend to avoid NCCL dependency
     torch.distributed.init_process_group(
-        backend='nccl',
+        backend='gloo',
         rank=rank,
         world_size=world_size,
         timeout=PROCESS_GROUP_TIMEOUT
@@ -466,7 +467,8 @@ def initialize_model(
     # Create model on meta device
     with set_default_dtype(torch.bfloat16), torch.device("meta"), init_empty_weights():
         config = AutoConfig.from_pretrained(args.model_dir, trust_remote_code=True)
-        config._attn_implementation = "flash_attention_2"
+        # Use eager attention to avoid flash_attn dependency
+        config._attn_implementation = "eager"
         config.use_cache = False
         config.chunked_loss_computer = args.use_chunked_loss_computer
         model = eval(args.model_class)(config)
@@ -1035,13 +1037,19 @@ def train():
     set_random_seed(args.seed)
     
     # Load dataset configuration
-    logger.info(f"Loading dataset config from: {args.dataset_config}")
-    with open(args.dataset_config, encoding="utf-8") as f:
-        dataset_config = json.loads(f.read())
-    dataset = dataset_config.pop("name")
-    dataset_config["model_class"] = args.model_class
-    if args.max_length:
-        dataset_config["max_length"] = args.max_length
+    if not args.data_path:
+        raise ValueError("--data_path is required for training data")
+    
+    logger.info(f"Using direct data path: {args.data_path}")
+    dataset = "chat_completion_parquet"
+    dataset_config = {
+        "sources": args.data_path,
+        "base_model_dir": args.model_dir,
+        "max_length": args.max_length or 32768,
+        "num_epochs": 1,
+        "num_workers": 2,
+        "model_class": args.model_class,
+    }
     
     # Load pretrained checkpoint
     converter = StateDictConverter()

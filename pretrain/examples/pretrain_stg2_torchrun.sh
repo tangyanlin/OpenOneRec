@@ -9,14 +9,27 @@
 
 set -x
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Change to the pretrain directory (parent of examples)
+cd "$SCRIPT_DIR"
+
+echo "Working directory: $(pwd)"
+
+# Get absolute path to this directory
+PRETRAIN_DIR=$(pwd)
+RECIPES_DIR="${PRETRAIN_DIR}/recipes"
+DATASET_CONFIG_DIR="${PRETRAIN_DIR}/examples/dataset_config"
+
 # ============== Configuration ==============
-STAGE1_OUTPUT_DIR=/code/onerec_pretrain/model_output/stg1_torchrun
-MODEL_DIR=${STAGE1_OUTPUT_DIR}/step2000/global_step2000/converted
-OUTPUT_DIR=/code/onerec_pretrain/model_output/stg2_torchrun
+STAGE1_OUTPUT_DIR=${STAGE1_OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg1_torchrun}
+MODEL_DIR=${MODEL_DIR:-${STAGE1_OUTPUT_DIR}/step2000/global_step2000/converted}
+OUTPUT_DIR=${OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg2_torchrun}
+DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet}
 
 # Number of nodes and GPUs per node
 NNODES=${NNODES:-1}
-NPROC_PER_NODE=${NPROC_PER_NODE:-8}
+NPROC_PER_NODE=${NPROC_PER_NODE:-1}
 
 # Master address and port (for multi-node training)
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -37,24 +50,20 @@ echo "Output: $OUTPUT_DIR"
 echo "NNODES: $NNODES, NPROC_PER_NODE: $NPROC_PER_NODE"
 echo "MASTER_ADDR: $MASTER_ADDR, MASTER_PORT: $MASTER_PORT"
 
-export PYTHONPATH=$PWD:$PYTHONPATH
+export PYTHONPATH=$PRETRAIN_DIR:$PYTHONPATH
 
 source set_env.sh
 
-# NCCL and network configuration
-export NCCL_IB_DISABLE=0
-export NCCL_IB_GID_INDEX=3
-export NCCL_SOCKET_IFNAME=${TCP_NIC:-$(ifconfig | grep -B1 " "$(hostname -i)" " | grep -o "^\w*")}
-export NCCL_IB_HCA=mlx5
-export NCCL_DEBUG=WARN
-export NCCL_IB_QPS_PER_CONNECTION=4
-export NCCL_NET_OVERHEAD=1000
-export NCCL_IB_TIMEOUT=20
+# Disable NCCL configuration (using Gloo backend instead)
+export NCCL_IB_DISABLE=1
+unset NCCL_IB_GID_INDEX NCCL_IB_HCA NCCL_DEBUG NCCL_IB_QPS_PER_CONNECTION NCCL_NET_OVERHEAD NCCL_IB_TIMEOUT NCCL_SOCKET_IFNAME
 
 # Disable proxy for internal communication
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 
 # Training parameters (Stage 2: full-parameter training, no --freeze_llm)
+# Note: torchrun executes the Python script directly, not through bash -c
+# Use absolute path to the Python script
 torchrun \
     --nnodes=${NNODES} \
     --nproc_per_node=${NPROC_PER_NODE} \
@@ -63,15 +72,15 @@ torchrun \
     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
     --max_restarts=3 \
     --monitor-interval=10 \
-    bash -c "bash scripts/numa_runner.sh python3 recipes/train_qwen3.py \
+    ${RECIPES_DIR}/train_qwen3.py \
         --model_dir $MODEL_DIR \
         --output_dir $OUTPUT_DIR \
-        --dataset_config examples/dataset_config/pretrain.json \
+        --data_path $DATA_PATH \
         --use_tie_weights \
         --model_class Qwen3ForCausalLM \
         --monitor_datasource_loss \
         --monitor_datasource_cnt \
-        --max_length 32768 \
+        --max_length 4096 \
         --learning_rate 2e-4 \
         --min_lr 1e-4 \
         --weight_decay 0.1 \
@@ -87,7 +96,7 @@ torchrun \
         --enable_profiler \
         --enable_gradient_checkpointing \
         --use_chunked_loss_computer \
-    " > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &
+    > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &
 
 echo "Training started in background. Check logs at:"
 echo "  - stdout: $OUTPUT_DIR/stdout.log"

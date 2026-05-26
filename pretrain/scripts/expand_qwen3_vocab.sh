@@ -2,8 +2,8 @@
 
 set -e
 
-HF_MODEL_DIR=/code/onerec_pretrain/hf_models/Qwen3-0.6B
-OUTPUT_MODEL_DIR=/code/onerec_pretrain/hf_models/Qwen3-0.6B_itemic
+HF_MODEL_DIR=/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/Qwen3-0.6B
+OUTPUT_MODEL_DIR=/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/Qwen3-0.6B_itemic
 ITEMIC_LAYER_N=3
 VOCAB_SIZE_PER_LAYER=8192
 
