@@ -419,22 +419,30 @@ def save_model_checkpoint(
 
 
 def initialize_distributed() -> Tuple[int, int, int]:
-    """Initialize distributed training environment.
-    
+    """Initialize distributed training environment using torchrun.
+
+    torchrun sets the following environment variables:
+    - RANK: Global rank of the process (0-based)
+    - WORLD_SIZE: Total number of processes
+    - LOCAL_RANK: Local rank of the process (GPU index on the node)
+    - MASTER_ADDR: Address of rank 0
+    - MASTER_PORT: Port for rendezvous
+
     Returns:
         Tuple of (rank, world_size, local_rank)
     """
-    rank = int(os.environ.get("OMPI_COMM_WORLD_RANK", 0))
-    world_size = int(os.environ.get("OMPI_COMM_WORLD_SIZE", 0))
-    local_rank = int(os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", 0))
-    
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
     torch.cuda.set_device(local_rank)
     torch.distributed.init_process_group(
+        backend='nccl',
         rank=rank,
         world_size=world_size,
         timeout=PROCESS_GROUP_TIMEOUT
     )
-    
+
     return rank, world_size, local_rank
 
 
