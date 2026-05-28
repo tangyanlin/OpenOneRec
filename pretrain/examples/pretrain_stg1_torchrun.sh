@@ -19,12 +19,13 @@ echo "Working directory: $(pwd)"
 # Get absolute path to this directory
 PRETRAIN_DIR=$(pwd)
 RECIPES_DIR="${PRETRAIN_DIR}/recipes"
-DATASET_CONFIG_DIR="${PRETRAIN_DIR}/examples/dataset_config"
 
 # ============== Configuration ==============
 MODEL_DIR=${MODEL_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/Qwen3-0.6B_itemic}
 OUTPUT_DIR=${OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg1_torchrun}
-DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet}
+# DATA_PATH can be a single path or multiple comma-separated paths
+# Example: DATA_PATH="/path/to/data1.parquet,/path/to/data2.parquet"
+DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_user_profile.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_video_rec.parquet}
 
 # Number of nodes and GPUs per node
 NNODES=${NNODES:-1}
@@ -82,7 +83,7 @@ torchrun \
         --model_class Qwen3ForCausalLM \
         --monitor_datasource_loss \
         --monitor_datasource_cnt \
-        --max_length 8192 \
+        --max_length 9000 \
         --learning_rate 2e-4 \
         --min_lr 1e-4 \
         --weight_decay 0.1 \
@@ -98,7 +99,7 @@ torchrun \
         --enable_profiler \
         --enable_gradient_checkpointing \
         --use_chunked_loss_computer \
-   # > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &
+    > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &
 
 echo "Training started in background. Check logs at:"
 echo "  - stdout: $OUTPUT_DIR/stdout.log"

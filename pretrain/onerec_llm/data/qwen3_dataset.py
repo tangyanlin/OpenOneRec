@@ -301,7 +301,8 @@ class Qwen3ChatCompletionDataset(IterableDataset):
         
         # Check length
         if input_ids.shape[-1] > self.max_length:
-            raise ValueError(f"Sample too long: {input_ids.shape[-1]} > {self.max_length}")
+            #logger.warning(f"Sample too long: {input_ids.shape[-1]} > {self.max_length}, skipping")
+            return None
         
         # Mask EOS token
         inputs["loss_mask"] = torch.ones_like(input_ids)
@@ -354,7 +355,8 @@ class Qwen3ChatCompletionDataset(IterableDataset):
         input_ids = inputs["input_ids"]        
         # Check length
         if input_ids.shape[-1] > self.max_length:
-            raise ValueError(f"Sample too long: {input_ids.shape[-1]} > {self.max_length}")
+            #logger.warning(f"Sample too long: {input_ids.shape[-1]} > {self.max_length}, skipping")
+            return None
         
         inputs["loss_mask"] = self._get_assistant_mask(
             input_ids,
@@ -382,16 +384,19 @@ class Qwen3ChatCompletionDataset(IterableDataset):
         else:
             inputs = self._process_chat(sample)
 
+        if inputs is None:
+            logger.warning(f"Sample skipped due to length limit, source={source_name}")
+            return None
+
         inputs['epoch_idx'] = sample['epoch_idx']
         if not inputs:
-            raise ValueError("Empty inputs, skip")
+            logger.warning("Empty inputs, skipping")
+            return None
         
         # Check if sample exceeds max_sample_length (always <= max_length)
         if inputs["input_ids"].shape[-1] > self.max_sample_length:
-            logger.warning(f"Sample exceeds max_sample_length={self.max_sample_length}, length={inputs['input_ids'].shape[-1]}")
-            raise ValueError(
-                f"Unable to generate sample within max_sample_length={self.max_sample_length}"
-            )
+            logger.warning(f"Sample exceeds max_sample_length={self.max_sample_length}, length={inputs['input_ids'].shape[-1]}, skipping")
+            return None
         
         return inputs
 
@@ -495,14 +500,14 @@ class Qwen3ChatCompletionDataset(IterableDataset):
         source_list = []
         cur_length = 0
         ds_iter = iter(self.dataset)
+        count = 0
         while True:
             try:
                 sample = next(ds_iter)
-            except StopIteration:
-                # No more samples, flush remaining buffer and exit
-                break
-            
-            try:
+                #logger.info(f"sample:{sample}")
+                count += 1
+                if count % 10000 == 0:
+                    logger.info(f"count:{count}")
                 sample_key = sample["__key__"] if "__key__" in sample else ""
                 sample_url = sample["__url__"] if "__url__" in sample else ""
 
@@ -515,21 +520,18 @@ class Qwen3ChatCompletionDataset(IterableDataset):
                 self.source_sample_cnt[source_name] += 1
             
                 inputs = self._process(sample, source_name)
+                if inputs is None:
+                    continue
             except Exception:
-                # source_name may not be defined if exception occurred before line 505
-                err_source_name = source_name if 'source_name' in dir() else "Unknown"
-                self.source_error_cnt.setdefault(err_source_name, 0)
-                self.source_error_cnt[err_source_name] += 1
-                sample_cnt = self.source_sample_cnt.get(err_source_name, 0)
-                error_ratio = self.source_error_cnt[err_source_name] * 1.0 / sample_cnt if sample_cnt > 0 else 0.0
+                self.source_error_cnt.setdefault(source_name, 0)
+                self.source_error_cnt[source_name] += 1
+                error_ratio = self.source_error_cnt[source_name] * 1.0 / \
+                self.source_sample_cnt[source_name]
                 
                 rank, world_size, worker, num_workers = pytorch_worker_info()
-                err_sample_key = sample_key if 'sample_key' in dir() else ""
-                err_sample_url = sample_url if 'sample_url' in dir() else ""
-                err_sample_str = str(sample)[:50] if 'sample' in dir() else "N/A"
                 logger.error(
                     f"Qwen3ChatCompletionDataset process sample error. worker=r{rank}_w{worker}"
-                    f"{err_source_name=}, {error_ratio=}, {err_sample_key=}, {err_sample_url=}, sample=\n{err_sample_str}"
+                    f"{source_name=}, {error_ratio=}, {sample_key=}, {sample_url=}, sample=\n{sample}"
                     f"errmsg={traceback.format_exc()}")
                 continue
 
@@ -734,6 +736,9 @@ class Qwen3ChatCompletionParquetDataset(Qwen3ChatCompletionDataset):
                 with open(sources, "r") as fp:
                     data_files = json.loads(fp.read())
                     data_files = [fn for fn in data_files if fn.endswith(".parquet")]
+            elif isinstance(sources, str) and "," in sources:
+                # Comma-separated parquet file paths
+                data_files = [fn.strip() for fn in sources.split(",") if fn.strip().endswith(".parquet")]
             elif isinstance(sources, str) and sources.endswith(".parquet"):
                 # Direct parquet file path
                 data_files = [sources]

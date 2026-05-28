@@ -25,7 +25,9 @@ DATASET_CONFIG_DIR="${PRETRAIN_DIR}/examples/dataset_config"
 STAGE2_OUTPUT_DIR=${STAGE2_OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg2_torchrun}
 MODEL_DIR=${MODEL_DIR:-${STAGE2_OUTPUT_DIR}/step5000/global_step5000/converted}
 OUTPUT_DIR=${OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/sft_torchrun}
-DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_label_pred.parquet}
+# DATA_PATH can be a single path or multiple comma-separated paths
+# Example: DATA_PATH="/path/to/data1.parquet,/path/to/data2.parquet"
+DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_label_pred.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_ad_rec.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_interactive_rec.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_item_understand.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_label_cond_rec.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_product_rec.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_rec_reason.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/sft_video_rec.parquet}
 
 # Number of nodes and GPUs per node
 NNODES=${NNODES:-1}
