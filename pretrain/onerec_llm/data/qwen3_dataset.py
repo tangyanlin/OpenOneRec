@@ -500,14 +500,22 @@ class Qwen3ChatCompletionDataset(IterableDataset):
         source_list = []
         cur_length = 0
         ds_iter = iter(self.dataset)
+        from collections import defaultdict
+        countstat = defaultdict(int)
         count = 0
         while True:
             try:
                 sample = next(ds_iter)
-                #logger.info(f"sample:{sample}")
-                count += 1
-                if count % 10000 == 0:
-                    logger.info(f"count:{count}")
+            except StopIteration:
+                break
+            #logger.info(f"sample:{sample}")
+            count += 1
+            if count % 1000 == 0:
+                logger.info(f"count:{count},countstst:{countstat}")
+            # # DEBUG: log to verify count vs yield relationship
+            # if count % 50 == 0:
+            #     logger.warning(f"[DEBUG] count={count}, yields_so_far={getattr(self, '_debug_yield_count', 0)}, cur_length={cur_length}, buffer_len={len(buffer)}")
+            try:
                 sample_key = sample["__key__"] if "__key__" in sample else ""
                 sample_url = sample["__url__"] if "__url__" in sample else ""
 
@@ -522,6 +530,7 @@ class Qwen3ChatCompletionDataset(IterableDataset):
                 inputs = self._process(sample, source_name)
                 if inputs is None:
                     continue
+                countstat[source_name] += 1
             except Exception:
                 self.source_error_cnt.setdefault(source_name, 0)
                 self.source_error_cnt[source_name] += 1
@@ -586,11 +595,18 @@ class Qwen3NaiveParquetDataset(IterableDataset):
         self.local_shuffle_buffer = LocalShuffleBuffer(buffer_size=self.kwargs.get("local_shuffle_buffer_size", 81920), 
                                                         random_fetch=self.kwargs.get("local_shuffle_random_fetch", 0.00001))
     
-        manager = multiprocessing.Manager()
-        def make_dict(): return manager.dict()
+        # When num_workers=0, data is loaded in the main process (worker_id=0).
+        # We still need finish_dict_all[0] to exist for the single worker case.
+        # Use plain dict when num_workers=0 to avoid unnecessary Manager process.
+        effective_num_workers = max(self.num_workers, 1)
+        if self.num_workers > 0:
+            manager = multiprocessing.Manager()
+            def make_dict(): return manager.dict()
+        else:
+            def make_dict(): return {}
 
         self.finish_dict_all = make_dict()
-        for i in range(self.num_workers):
+        for i in range(effective_num_workers):
             self.finish_dict_all[i] = make_dict()
     
     def _parser(self, raw_row_data, file_url):
@@ -640,9 +656,14 @@ class Qwen3NaiveParquetDataset(IterableDataset):
     def __iter__local_shuffle(self):
         rank, world_size, worker, num_workers = pytorch_worker_info()
         finish_dict = self.finish_dict_all[worker]
-        assert num_workers == self.num_workers
+        # When DataLoader num_workers=0, pytorch_worker_info returns num_workers=1
+        # (the main process acts as worker 0), but self.num_workers is 0.
+        # Use the effective num_workers for computation.
+        effective_num_workers = max(self.num_workers, 1)
+        assert num_workers == effective_num_workers, \
+            f"num_workers mismatch: got {num_workers} from pytorch_worker_info, expected {effective_num_workers}"
 
-        total_num_workers = num_workers * world_size
+        total_num_workers = effective_num_workers * world_size
         local_worker_idx = rank * num_workers + worker
         fn_list = [fn for idx, fn in enumerate(self.data_files) if idx % total_num_workers == local_worker_idx]
         logger.warning(

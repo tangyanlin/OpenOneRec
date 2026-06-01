@@ -36,6 +36,7 @@ def get_chat_completion_parquet_dataloader(sources: str,
         batch_size=1,
         num_workers=num_workers,
         collate_fn=lambda x: x[0],
+        prefetch_factor=4
     )
     return dataloader
 

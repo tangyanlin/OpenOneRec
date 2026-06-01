@@ -468,7 +468,7 @@ def initialize_model(
     with set_default_dtype(torch.bfloat16), torch.device("meta"), init_empty_weights():
         config = AutoConfig.from_pretrained(args.model_dir, trust_remote_code=True)
         # Use eager attention to avoid flash_attn dependency
-        config._attn_implementation = "eager"
+        config._attn_implementation = "sdpa"
         config.use_cache = False
         config.chunked_loss_computer = args.use_chunked_loss_computer
         model = eval(args.model_class)(config)
@@ -1047,10 +1047,31 @@ def train():
         "base_model_dir": args.model_dir,
         "max_length": args.max_length or 32768,
         "num_epochs": 1,
-        "num_workers": 2,
+        "num_workers": 3,
         "model_class": args.model_class,
+        "itemic_id_range":[151669, 176246],
+        "cut_to_pad": 1,
+        "model_class": "Qwen3ForCausalLM",
+        "full_attention": False,
+       "local_shuffle_buffer_size": 10000
     }
-    
+#     {
+#     "name": "chat_completion_parquet",
+#     "sources": "../output/split_data_pretrain/file_list.json",
+#     "only_assistant_loss": false,
+#     "max_length": 30000,
+#     "base_model_dir": "/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/Qwen3-0.6B_itemic",
+#     "num_workers": 2,
+#     "num_epochs": 4,
+#     "cut_to_pad": 1,
+#     "model_class": "Qwen3ForCausalLM",
+#     "full_attention": false,
+#     "local_shuffle_buffer_size": 10000,
+#     "max_sample_length": 30000,
+#     "local_shuffle_random_fetch": 0.0001,
+#     "itemic_id_range": [151669, 176246]
+# }
+
     # Load pretrained checkpoint
     converter = StateDictConverter()
     state_dict = None

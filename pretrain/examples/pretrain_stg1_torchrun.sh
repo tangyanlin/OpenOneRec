@@ -83,7 +83,7 @@ torchrun \
         --model_class Qwen3ForCausalLM \
         --monitor_datasource_loss \
         --monitor_datasource_cnt \
-        --max_length 9000 \
+        --max_length 14000 \
         --learning_rate 2e-4 \
         --min_lr 1e-4 \
         --weight_decay 0.1 \
@@ -91,10 +91,9 @@ torchrun \
         --lr_scheduler_type cosine \
         --num_warmup_steps 200 \
         --num_training_steps 2000 \
-        --save_checkpoint_per_step 50 \
+        --save_checkpoint_per_step 500 \
         --minibatch_size 16384 \
         --logging_per_step 5 \
-        --use_fp32_weight \
         --seed 19260817 \
         --enable_profiler \
         --enable_gradient_checkpointing \
