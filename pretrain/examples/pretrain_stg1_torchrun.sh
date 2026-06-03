@@ -91,7 +91,7 @@ torchrun \
         --lr_scheduler_type cosine \
         --num_warmup_steps 200 \
         --num_training_steps 2000 \
-        --save_checkpoint_per_step 500 \
+        --save_checkpoint_per_step 5000 \
         --minibatch_size 16384 \
         --logging_per_step 5 \
         --seed 19260817 \
