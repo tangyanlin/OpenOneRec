@@ -1047,7 +1047,7 @@ def train():
         "base_model_dir": args.model_dir,
         "max_length": args.max_length or 32768,
         "num_epochs": 1,
-        "num_workers": 3,
+        "num_workers": 2,
         "model_class": args.model_class,
         "itemic_id_range":[151669, 176246],
         "cut_to_pad": 1,

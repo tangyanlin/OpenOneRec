@@ -25,8 +25,8 @@ MODEL_DIR=${MODEL_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/Open
 OUTPUT_DIR=${OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg1_torchrun}
 # DATA_PATH can be a single path or multiple comma-separated paths
 # Example: DATA_PATH="/path/to/data1.parquet,/path/to/data2.parquet"
-DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_user_profile.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_video_rec.parquet}
-
+DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_user_profile.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_video_rec.parquet}
+#/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet
 # Number of nodes and GPUs per node
 NNODES=${NNODES:-1}
 NPROC_PER_NODE=${NPROC_PER_NODE:-1}
@@ -83,7 +83,7 @@ torchrun \
         --model_class Qwen3ForCausalLM \
         --monitor_datasource_loss \
         --monitor_datasource_cnt \
-        --max_length 14000 \
+        --max_length 12000 \
         --learning_rate 2e-4 \
         --min_lr 1e-4 \
         --weight_decay 0.1 \
@@ -95,7 +95,6 @@ torchrun \
         --minibatch_size 16384 \
         --logging_per_step 5 \
         --seed 19260817 \
-        --enable_profiler \
         --enable_gradient_checkpointing \
         --use_chunked_loss_computer \
     > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &

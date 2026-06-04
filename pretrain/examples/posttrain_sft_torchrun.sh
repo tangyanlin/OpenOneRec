@@ -93,9 +93,7 @@ torchrun \
         --save_checkpoint_per_step 50 \
         --minibatch_size 16384 \
         --logging_per_step 5 \
-        --use_fp32_weight \
         --seed 19260817 \
-        --enable_profiler \
         --enable_gradient_checkpointing \
         --use_chunked_loss_computer \
     > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &

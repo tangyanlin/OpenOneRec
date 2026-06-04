@@ -23,12 +23,12 @@ DATASET_CONFIG_DIR="${PRETRAIN_DIR}/examples/dataset_config"
 
 # ============== Configuration ==============
 STAGE1_OUTPUT_DIR=${STAGE1_OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg1_torchrun}
-MODEL_DIR=${MODEL_DIR:-${STAGE1_OUTPUT_DIR}/step2000/global_step2000/converted}
+MODEL_DIR=${MODEL_DIR:-${STAGE1_OUTPUT_DIR}/step47126/global_step47126/converted}
 OUTPUT_DIR=${OUTPUT_DIR:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/model_output/stg2_torchrun}
 # DATA_PATH can be a single path or multiple comma-separated paths
 # Example: DATA_PATH="/path/to/data1.parquet,/path/to/data2.parquet"
-DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_user_profile.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_video_rec.parquet}
-
+DATA_PATH=${DATA_PATH:-/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_user_profile.parquet,/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_video_rec.parquet}
+#/home/jovyan/llm-dev-datavol-1/tangyanlin/AdOneModel/OpenOneRec/data/pretrain_item_understand.parquet
 
 # Number of nodes and GPUs per node
 NNODES=${NNODES:-1}
@@ -91,11 +91,10 @@ torchrun \
         --lr_scheduler_type cosine \
         --num_warmup_steps 500 \
         --num_training_steps 5000 \
-        --save_checkpoint_per_step 50 \
+        --save_checkpoint_per_step 5000 \
         --minibatch_size 16384 \
         --logging_per_step 5 \
         --seed 19260817 \
-        --enable_profiler \
         --enable_gradient_checkpointing \
         --use_chunked_loss_computer \
     > $OUTPUT_DIR/stdout.log 2>$OUTPUT_DIR/stderr.log &
