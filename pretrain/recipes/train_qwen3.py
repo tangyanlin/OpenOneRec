@@ -32,7 +32,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from onerec_llm.data.dataloaders import get_dataloader
 from onerec_llm.losses import CrossEntropyLoss, ChunkedLossComputer
-from onerec_llm.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
+from onerec_llm.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM, Qwen3ForSequenceClassification
 from onerec_llm.training.activations import set_activation_checkpointing
 from onerec_llm.training.checkpoint import (
     AppState,
@@ -471,6 +471,13 @@ def initialize_model(
         config._attn_implementation = "sdpa"
         config.use_cache = False
         config.chunked_loss_computer = args.use_chunked_loss_computer
+        # Set num_labels for sequence classification (binary: yes/no)
+        if args.model_class == 'Qwen3ForSequenceClassification':
+            config.num_labels = 2
+            # Qwen3ForSequenceClassification requires pad_token_id for batched inference
+            # to locate the last non-padding token for pooling
+            if config.pad_token_id is None:
+                config.pad_token_id = 151643  # Qwen3 default pad_token_id
         model = eval(args.model_class)(config)
     
     # Verify all parameters are on meta device
@@ -502,10 +509,19 @@ def initialize_model(
     
     # Load state dict
     with Timer("Load state dict"):
+        # For Qwen3ForSequenceClassification, the 'score' head is randomly initialized
+        # since pretrained weights are from Qwen3ForCausalLM which doesn't have it
+        allow_random_init = args.allow_random_init_params
+        if args.model_class == 'Qwen3ForSequenceClassification':
+            if allow_random_init:
+                allow_random_init += ',score.weight'
+            else:
+                allow_random_init = 'score.weight'
+        
         load_from_full_model_state_dict(
             model=model,
             full_sd=state_dict,
-            allow_random_init_params=args.allow_random_init_params,
+            allow_random_init_params=allow_random_init,
             use_tie_weights=args.use_tie_weights
         )
     
@@ -513,14 +529,18 @@ def initialize_model(
     # Sharing weights between embedding and output projection can reduce parameters
     # and improve training stability for some models
     if args.use_tie_weights:
-        model.lm_head.weight = model.model.embed_tokens.weight
-        # Verify weight tying: check if there are any differences (should be ~0)
-        diff_weight = model.lm_head.weight - model.model.embed_tokens.weight
-        diff_weight_cnt = (diff_weight.full_tensor().abs() > 1e-6).float().sum()
-        print_rank_0(
-            f"diff_weight_cnt: {diff_weight_cnt.item()}, "
-            f"diff_weight_ratio: {diff_weight_cnt.item() / model.lm_head.weight.numel():.4f}"
-        )
+        if args.model_class == 'Qwen3ForCausalLM':
+            model.lm_head.weight = model.model.embed_tokens.weight
+            # Verify weight tying: check if there are any differences (should be ~0)
+            diff_weight = model.lm_head.weight - model.model.embed_tokens.weight
+            diff_weight_cnt = (diff_weight.full_tensor().abs() > 1e-6).float().sum()
+            print_rank_0(
+                f"diff_weight_cnt: {diff_weight_cnt.item()}, "
+                f"diff_weight_ratio: {diff_weight_cnt.item() / model.lm_head.weight.numel():.4f}"
+            )
+        elif args.model_class == 'Qwen3ForSequenceClassification':
+            # SequenceClassification uses 'score' head, no weight tying with embeddings
+            print_rank_0("Qwen3ForSequenceClassification does not support weight tying, skipping")
     
     # Initialize RoPE
     with torch.device(torch.cuda.current_device()):
@@ -545,7 +565,7 @@ def initialize_model(
     if args.freeze_llm:
         assert args.start_optimize_embedding_index > 0
         for name, param in model.named_parameters():
-            if "embed_tokens" in name or "lm_head" in name:
+            if "embed_tokens" in name or "lm_head" in name or "score" in name:
                 param.requires_grad = True  # Only embeddings and output head are trainable
             else:
                 param.requires_grad = False  # Freeze all transformer layers
@@ -701,6 +721,8 @@ def compute_forward_backward(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute forward and backward pass.
     
+    Supports both Qwen3ForCausalLM and Qwen3ForSequenceClassification.
+    
     Args:
         model: Model instance
         batch: Input batch
@@ -719,36 +741,67 @@ def compute_forward_backward(
     cu_seqlens = batch.get("cu_seqlens", None)
     position_ids = batch.get("position_ids", None)
     
-    # Prepare labels
-    # Zero out padding tokens (input_ids <= 0) to avoid computing loss on them
-    input_ids = input_ids * (input_ids > 0).to(torch.int64, non_blocking=True)
+    is_seq_cls = args.model_class == 'Qwen3ForSequenceClassification'
+    
+    # For CausalLM: Zero out padding tokens (input_ids <= 0) to avoid computing loss on them
+    # For SequenceClassification: Keep original input_ids because the model needs
+    # input_ids != pad_token_id to locate the last non-padding token for pooling
+    if not is_seq_cls:
+        input_ids = input_ids * (input_ids > 0).to(torch.int64, non_blocking=True)
+    
     # Forward pass
     with Timer("Fwd"):
-        output = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=None,
-            cu_seqlens=cu_seqlens,
-            position_ids=position_ids,
-        )
-        
-        logits = output.logits
-        
-        # Shift labels for next token prediction
-        # For causal LM, we predict token[i] given tokens[0:i], so labels need to be shifted
-        # by one position: label[i] should correspond to input[i+1]
-        pad = torch.full(
-            (input_ids.shape[0], 1),
-            loss_fn.ignore_index,
-            dtype=input_ids.dtype
-        ).to(device=input_ids.device, non_blocking=True)
-        labels = torch.cat([input_ids[:, 1:], pad], dim=-1)
-        # Update labels: use input_ids where loss_mask==1, ignore_index where loss_mask==0
-        # This allows selective loss computation on specific tokens (e.g., excluding special tokens)
-        labels = labels * loss_mask + loss_fn.ignore_index * (1 - loss_mask)
-        
-        loss, per_token_loss = compute_loss_fn(logits, labels=labels)
-        per_token_loss = per_token_loss.to(loss.device)
+        if is_seq_cls:
+            # Sequence Classification: use integer labels directly
+            # Seq cls dataset outputs shape (1, batch_size, max_len), need to reshape to (batch_size, max_len)
+            if input_ids.dim() == 3:
+                input_ids = input_ids.squeeze(0)  # (batch_size, max_len)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.squeeze(0)
+                if position_ids is not None:
+                    position_ids = position_ids.squeeze(0)
+            
+            labels = batch["labels"]  # (1, batch_size) or (batch_size,)
+            if labels.dim() > 1:
+                labels = labels.squeeze(0)  # (batch_size,)
+            
+            output = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                position_ids=position_ids,
+            )
+            
+            loss = output.loss
+            # For seq cls, create a dummy per_token_loss for metric compatibility
+            per_token_loss = torch.zeros_like(input_ids, dtype=torch.float32)
+        else:
+            # Causal LM: next-token prediction
+            output = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=None,
+                cu_seqlens=cu_seqlens,
+                position_ids=position_ids,
+            )
+            
+            logits = output.logits
+            
+            # Shift labels for next token prediction
+            # For causal LM, we predict token[i] given tokens[0:i], so labels need to be shifted
+            # by one position: label[i] should correspond to input[i+1]
+            pad = torch.full(
+                (input_ids.shape[0], 1),
+                loss_fn.ignore_index,
+                dtype=input_ids.dtype
+            ).to(device=input_ids.device, non_blocking=True)
+            labels = torch.cat([input_ids[:, 1:], pad], dim=-1)
+            # Update labels: use input_ids where loss_mask==1, ignore_index where loss_mask==0
+            # This allows selective loss computation on specific tokens (e.g., excluding special tokens)
+            labels = labels * loss_mask + loss_fn.ignore_index * (1 - loss_mask)
+            
+            loss, per_token_loss = compute_loss_fn(logits, labels=labels)
+            per_token_loss = per_token_loss.to(loss.device)
     
     # Backward pass
     with Timer("bwd"):
@@ -799,7 +852,20 @@ def compute_metrics(
     
     # Compute token metrics
     token_count = input_ids.numel()
-    num_samples = len(cu_seqlens) - 1 if cu_seqlens is not None else 1
+    if cu_seqlens is not None:
+        num_samples = len(cu_seqlens) - 1
+    elif "labels" in batch and batch["labels"].dim() >= 1:
+        # For sequence classification with standard batching
+        # labels shape: (1, batch_size) or (batch_size,)
+        labels = batch["labels"]
+        if labels.dim() == 1:
+            num_samples = labels.shape[0]
+        elif labels.dim() == 2:
+            num_samples = labels.shape[1] if labels.shape[0] == 1 else labels.shape[0]
+        else:
+            num_samples = 1
+    else:
+        num_samples = 1
     
     # Calculate number of valid tokens (tokens with loss_mask == 1)
     # Works for both 1D (flattened) and 2D (batch, seq_len) loss_mask
@@ -1051,7 +1117,6 @@ def train():
         "model_class": args.model_class,
         "itemic_id_range":[151669, 176246],
         "cut_to_pad": 1,
-        "model_class": "Qwen3ForCausalLM",
         "full_attention": False,
        "local_shuffle_buffer_size": 10000
     }
@@ -1173,12 +1238,15 @@ def train():
     )
     
     # Initialize loss function
+    is_seq_cls = args.model_class == 'Qwen3ForSequenceClassification'
+    
     loss_fn = CrossEntropyLoss(
         ignore_index=-100, return_token_loss=True, shift_labels=False
     )
     compute_loss_fn = loss_fn
     chunked_loss_computer = None
-    if args.use_chunked_loss_computer:
+    if args.use_chunked_loss_computer and not is_seq_cls:
+        # ChunkedLossComputer is only for CausalLM (uses lm_head)
         chunked_loss_computer = ChunkedLossComputer(
             lm_head=model.lm_head,
             loss_fn=loss_fn,
@@ -1226,7 +1294,11 @@ def train():
             # Sleep based on rank to stagger output and make logs easier to read
             if remaining_debug_samples > 0 and dist.get_rank() <= 8:
                 with Timer("Show data"):
-                    input_text = tokenizer.decode(batch['input_ids'][0])
+                    # For seq cls, input_ids shape is (1, batch, len); for CausalLM, (1, len)
+                    ids_to_decode = batch['input_ids'][0]
+                    if ids_to_decode.dim() > 1:
+                        ids_to_decode = ids_to_decode[0]  # Take first sample in batch
+                    input_text = tokenizer.decode(ids_to_decode)
                     # Stagger output by rank to avoid interleaved prints (0.3s per rank)
                     time.sleep(float(dist.get_rank()) * 0.3)
                     print(f"Input Text:\n\n{input_text}\n" + "=" * 100 + "\n\n")
@@ -1239,7 +1311,19 @@ def train():
             
             # Update MFU stats
             token_count = batch["input_ids"].numel()
-            num_samples = len(batch.get("cu_seqlens", [0, 1])) - 1
+            cu_seqlens = batch.get("cu_seqlens", None)
+            if cu_seqlens is not None:
+                num_samples = len(cu_seqlens) - 1
+            elif "labels" in batch and batch["labels"].dim() >= 1:
+                labels = batch["labels"]
+                if labels.dim() == 1:
+                    num_samples = labels.shape[0]
+                elif labels.dim() == 2:
+                    num_samples = labels.shape[1] if labels.shape[0] == 1 else labels.shape[0]
+                else:
+                    num_samples = 1
+            else:
+                num_samples = 1
             mfu_stats.set(num_tokens=token_count, num_samples=num_samples)
             
             # Forward and backward pass

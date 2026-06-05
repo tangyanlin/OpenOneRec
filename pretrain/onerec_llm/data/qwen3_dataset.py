@@ -797,3 +797,234 @@ class Qwen3ChatCompletionParquetDataset(Qwen3ChatCompletionDataset):
         if self.dataset is None:
             return
         self.dataset.load_state_dict(state_dict)
+
+
+class Qwen3SeqClsParquetDataset(Qwen3ChatCompletionParquetDataset):
+    """Sequence Classification dataset for Qwen3 (e.g., yes/no binary classification).
+    
+    Unlike the CausalLM dataset which computes next-token prediction loss,
+    this dataset extracts integer labels from the assistant's response and
+    outputs data suitable for Qwen3ForSequenceClassification.
+    
+    The label is extracted from the assistant message content:
+    - "是" (yes) -> label 1
+    - "否" (no)  -> label 0
+    
+    The output batch contains:
+    - input_ids, attention_mask, position_ids: same as CausalLM
+    - labels: integer tensor of shape (batch_size,) with values 0 or 1
+    - loss_mask: all ones (not used for seq cls, but kept for compatibility)
+    - itemic_id_mask: same as CausalLM
+    """
+    
+    # Label mapping for yes/no classification
+    LABEL_MAP = {"是": 1, "否": 0}
+    
+    def _extract_label(self, messages):
+        """Extract classification label from assistant message.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            
+        Returns:
+            int: 1 for "是", 0 for "否", or None if label cannot be extracted
+        """
+        for msg in reversed(messages):
+            if msg.get('role') == 'assistant':
+                content = msg.get('content', '')
+                if isinstance(content, list):
+                    # Handle structured content format
+                    text = ""
+                    for c in content:
+                        if isinstance(c, dict) and c.get('type') == 'text':
+                            text += c.get('text', '')
+                        elif isinstance(c, str):
+                            text += c
+                    content = text
+                
+                # Strip whitespace and match
+                content_stripped = content.strip()
+                if content_stripped in self.LABEL_MAP:
+                    return self.LABEL_MAP[content_stripped]
+                
+                # Try to find label in metadata
+                logger.warning(
+                    f"Cannot extract label from assistant content: '{content_stripped[:50]}...'"
+                )
+                return None
+        
+        logger.warning("No assistant message found in sample")
+        return None
+    
+    def _process_chat(self, sample: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        """Process messages format data for sequence classification.
+        
+        Similar to parent class, but:
+        1. Extracts integer label from assistant message instead of computing loss_mask
+        2. Only tokenizes the user+system part (without assistant response) for classification
+        3. Returns 'labels' as integer tensor instead of 'loss_mask'
+        
+        Args:
+            sample: Sample containing messages in chat format
+            
+        Returns:
+            Dictionary containing input_ids, attention_mask, labels, etc.
+        """
+        msg_key = "message" if "message" in sample["json"] else "messages"
+        messages = sample["json"][msg_key]
+        
+        # Extract label before modifying messages
+        label = self._extract_label(messages)
+        if label is None:
+            return None
+        
+        msg_converted = self._convert_messages(messages)
+        
+        # For sequence classification, we only need the input part (system + user),
+        # not the assistant response. The model will classify the entire input.
+        # We keep the full conversation for tokenization to maintain compatibility
+        # with the pretrained model's chat template expectations.
+        input_messages = []
+        for msg in msg_converted:
+            if msg['role'] != 'assistant':
+                input_messages.append(msg)
+        
+        # Convert messages to text using chat template (without assistant response)
+        text = self.tokenizer.apply_chat_template(
+            input_messages,
+            tokenize=False,
+            add_generation_prompt=True  # Add assistant prompt for proper formatting
+        )
+        
+        # Tokenize
+        inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=False,
+            truncation=False
+        )
+        
+        input_ids = inputs["input_ids"]
+        
+        # Check length
+        if input_ids.shape[-1] > self.max_length:
+            return None
+        
+        # For sequence classification, loss_mask is all ones (used for metric tracking only)
+        inputs["loss_mask"] = torch.ones_like(input_ids)
+        
+        # Add classification label
+        inputs["labels"] = torch.tensor([label], dtype=torch.long)
+        
+        # itemic id index mask
+        itemic_id_mask = torch.zeros_like(input_ids)
+        if self.itemic_id_range is not None:
+            itemic_id_mask[(input_ids >= self.itemic_id_range[0]) & (input_ids <= self.itemic_id_range[1])] = 1
+        inputs["itemic_id_mask"] = itemic_id_mask
+        
+        # Generate position IDs
+        inputs["position_ids"] = self._get_rope_index_qwen3(input_ids)
+        
+        return inputs
+    
+    def _process_completion(self, sample: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        """Process segments format data for sequence classification.
+        
+        For segments format, we try to extract label from metadata.
+        Falls back to _process_chat if messages are available.
+        """
+        # Segments format doesn't have structured messages, try to use messages instead
+        if "messages" in sample["json"] and sample["json"]["messages"] is not None:
+            return self._process_chat(sample)
+        
+        logger.warning("Segments format not supported for sequence classification without messages")
+        return None
+    
+    def _packing(self, buffer: List[Dict[str, torch.Tensor]]):
+        """Pack multiple samples into a single batch for sequence classification.
+        
+        Unlike CausalLM packing which concatenates sequences with cu_seqlens,
+        sequence classification packs samples as a standard batch since each
+        sample needs its own classification output.
+        """
+        # For sequence classification, we don't use flash attention packing
+        # Instead, we pad to the same length and create a standard batch
+        max_len = max(inp["input_ids"].shape[-1] for inp in buffer)
+        
+        batch_input_ids = []
+        batch_attention_mask = []
+        batch_position_ids = []
+        batch_loss_mask = []
+        batch_itemic_id_mask = []
+        batch_labels = []
+        batch_sample_idx = []
+        epochs = []
+        
+        for i, inputs in enumerate(buffer):
+            epochs.append(inputs.get("epoch_idx", None))
+            
+            seq_len = inputs["input_ids"].shape[-1]
+            pad_len = max_len - seq_len
+            
+            # Pad input_ids with pad_token_id
+            padded_input_ids = F.pad(
+                inputs["input_ids"].squeeze(0),
+                (0, pad_len),
+                value=self.tokenizer.pad_token_id
+            )
+            batch_input_ids.append(padded_input_ids)
+            
+            # Pad attention_mask with 0 (mask padding tokens)
+            padded_attention_mask = F.pad(
+                inputs["attention_mask"].squeeze(0),
+                (0, pad_len),
+                value=0
+            )
+            batch_attention_mask.append(padded_attention_mask)
+            
+            # Pad position_ids
+            padded_position_ids = F.pad(
+                inputs["position_ids"].squeeze(0),
+                (0, pad_len),
+                value=0
+            )
+            batch_position_ids.append(padded_position_ids)
+            
+            # Pad loss_mask with 0
+            padded_loss_mask = F.pad(
+                inputs["loss_mask"].squeeze(0),
+                (0, pad_len),
+                value=0
+            )
+            batch_loss_mask.append(padded_loss_mask)
+            
+            # Pad itemic_id_mask with 0
+            padded_itemic_id_mask = F.pad(
+                inputs["itemic_id_mask"].squeeze(0),
+                (0, pad_len),
+                value=0
+            )
+            batch_itemic_id_mask.append(padded_itemic_id_mask)
+            
+            # Label (scalar per sample)
+            batch_labels.append(inputs["labels"].squeeze())
+            
+            # Sample index
+            batch_sample_idx.append(torch.full((max_len,), i, dtype=torch.int32))
+        
+        # Stack into batches
+        inputs = {
+            "input_ids": torch.stack(batch_input_ids).unsqueeze(0),  # (1, batch, max_len)
+            "attention_mask": torch.stack(batch_attention_mask).unsqueeze(0),
+            "position_ids": torch.stack(batch_position_ids).unsqueeze(0),
+            "loss_mask": torch.stack(batch_loss_mask).unsqueeze(0),
+            "itemic_id_mask": torch.stack(batch_itemic_id_mask).unsqueeze(0),
+            "labels": torch.stack(batch_labels).unsqueeze(0),  # (1, batch)
+            "sample_idx": torch.stack(batch_sample_idx).unsqueeze(0).to(torch.int32),
+            "epoch_idx": torch.tensor(
+                [sum(e for e in epochs if e is not None) / max(len([e for e in epochs if e is not None]), 1)],
+                dtype=torch.float32
+            ),
+        }
+        
+        return inputs
