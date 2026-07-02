@@ -19,7 +19,7 @@ import pytest
 import torch
 import torch.distributed
 import transformers
-from flash_attn.bert_padding import index_first_axis, rearrange, unpad_input
+from verl.utils.attention_utils import index_first_axis, rearrange, unpad_input
 from packaging import version
 from torch.distributed import init_device_mesh
 from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig, Qwen2Config

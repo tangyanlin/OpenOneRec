@@ -815,10 +815,27 @@ class Qwen3SeqClsParquetDataset(Qwen3ChatCompletionParquetDataset):
     - labels: integer tensor of shape (batch_size,) with values 0 or 1
     - loss_mask: all ones (not used for seq cls, but kept for compatibility)
     - itemic_id_mask: same as CausalLM
+    
+    Batch size is controlled by `seq_cls_batch_size` (default: 8), which determines
+    how many samples are packed into each batch. Unlike CausalLM which concatenates
+    samples into one long sequence, SeqCls pads samples to the same length and stacks
+    them, so batch size directly affects GPU memory usage.
     """
     
     # Label mapping for yes/no classification
     LABEL_MAP = {"是": 1, "否": 0}
+    
+    def __init__(self, *args, seq_cls_batch_size=8, **kwargs):
+        """Initialize SeqCls dataset.
+        
+        Args:
+            seq_cls_batch_size: Number of samples per batch (default: 8).
+                Unlike CausalLM which uses max_length to control batch size via
+                sequence packing, SeqCls uses explicit batch size since each
+                sample needs independent classification with padded batching.
+        """
+        super().__init__(*args, **kwargs)
+        self.seq_cls_batch_size = seq_cls_batch_size
     
     def _extract_label(self, messages):
         """Extract classification label from assistant message.
@@ -1028,3 +1045,86 @@ class Qwen3SeqClsParquetDataset(Qwen3ChatCompletionParquetDataset):
         }
         
         return inputs
+    
+    def __iter__(self):
+        """Iterate over the dataset, yielding batches of size seq_cls_batch_size.
+        
+        Unlike the parent CausalLM __iter__ which packs samples by total token length
+        (concatenating into one long sequence), this method groups samples into fixed-size
+        batches controlled by seq_cls_batch_size. Each batch is then padded and stacked
+        by _packing() for sequence classification.
+        """
+        if self.dataset is None:
+            self.dataset, self.total_samples = self._build_source_dataset(self.sources)
+        
+        buffer = []
+        source_list = []
+        ds_iter = iter(self.dataset)
+        from collections import defaultdict
+        countstat = defaultdict(int)
+        count = 0
+        
+        while True:
+            try:
+                sample = next(ds_iter)
+            except StopIteration:
+                break
+            
+            count += 1
+            if count % 1000 == 0:
+                logger.info(f"count:{count},countstat:{countstat}")
+            
+            try:
+                sample_key = sample["__key__"] if "__key__" in sample else ""
+                sample_url = sample["__url__"] if "__url__" in sample else ""
+                
+                try:
+                    source_name = sample["json"]["source"]
+                except Exception:
+                    source_name = "None"
+                
+                self.source_sample_cnt.setdefault(source_name, 0)
+                self.source_sample_cnt[source_name] += 1
+                
+                inputs = self._process(sample, source_name)
+                if inputs is None:
+                    continue
+                countstat[source_name] += 1
+            except Exception:
+                self.source_error_cnt.setdefault(source_name, 0)
+                self.source_error_cnt[source_name] += 1
+                error_ratio = self.source_error_cnt[source_name] * 1.0 / \
+                    self.source_sample_cnt[source_name]
+                
+                rank, world_size, worker, num_workers = pytorch_worker_info()
+                logger.error(
+                    f"Qwen3SeqClsDataset process sample error. worker=r{rank}_w{worker}"
+                    f"{source_name=}, {error_ratio=}, {sample_key=}, {sample_url=}, sample=\n{sample}"
+                    f"errmsg={traceback.format_exc()}")
+                continue
+            
+            buffer.append(inputs)
+            source_list.append(source_name)
+            
+            # Yield a batch when buffer reaches seq_cls_batch_size
+            if len(buffer) >= self.seq_cls_batch_size:
+                packed_inputs = self._packing(buffer)
+                packed_inputs["data_source"] = source_list
+                buffer = []
+                source_list = []
+                
+                if packed_inputs["loss_mask"].sum() == 0:
+                    logger.warning("Skipping batch with no valid loss tokens.")
+                    continue
+                
+                yield packed_inputs
+        
+        # Flush remaining buffer after iteration ends
+        if buffer:
+            try:
+                packed_inputs = self._packing(buffer)
+                packed_inputs["data_source"] = source_list
+                if packed_inputs["loss_mask"].sum() > 0:
+                    yield packed_inputs
+            except Exception as e:
+                logger.warning(f"Failed to flush buffer: {e}")

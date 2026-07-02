@@ -232,6 +232,11 @@ def get_argument_parser() -> argparse.ArgumentParser:
                        help="Directory to write the trained model")
     parser.add_argument("--model_class", type=str, default="Qwen3ForCausalLM",
                        help="Model class name")
+    parser.add_argument("--seq_cls_batch_size", type=int, default=8,
+                       help="Batch size for sequence classification (number of samples per batch). "
+                            "Only used when model_class=Qwen3ForSequenceClassification. "
+                            "Unlike CausalLM which controls batch size via max_length and sequence packing, "
+                            "SeqCls uses explicit batch size since each sample needs independent classification.")
     
     # Dataset arguments
     parser.add_argument("--data_path", type=str, default=None,
@@ -1120,6 +1125,9 @@ def train():
         "full_attention": False,
        "local_shuffle_buffer_size": 10000
     }
+    # For sequence classification, pass batch size parameter
+    if args.model_class == 'Qwen3ForSequenceClassification':
+        dataset_config['seq_cls_batch_size'] = args.seq_cls_batch_size
 #     {
 #     "name": "chat_completion_parquet",
 #     "sources": "../output/split_data_pretrain/file_list.json",

@@ -18,7 +18,10 @@ from dataclasses import dataclass
 import pytest
 import torch
 import torch.distributed
-from flash_attn.bert_padding import index_first_axis, rearrange, unpad_input
+try:
+    from flash_attn.bert_padding import index_first_axis, rearrange, unpad_input
+except ImportError:
+    from verl.utils.flash_attn_fallback import index_first_axis, rearrange, unpad_input
 from torch.distributed import init_device_mesh
 from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig, Qwen2Config
 

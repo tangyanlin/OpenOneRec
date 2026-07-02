@@ -22,8 +22,12 @@ from typing import Optional
 
 import torch
 from packaging import version
-from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from transformers.modeling_utils import PreTrainedModel
+
+try:
+    from transformers.modeling_flash_attention_utils import _flash_attention_forward
+except ImportError:
+    _flash_attention_forward = None
 
 from verl.utils.import_utils import is_trl_available
 from verl.utils.ulysses import (

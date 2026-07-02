@@ -65,9 +65,20 @@ from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_in
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 if is_cuda_available:
-    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    try:
+        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    except ImportError:
+        try:
+            from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+        except ImportError:
+            from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 elif is_npu_available:
-    from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    try:
+        from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    except ImportError:
+        from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
+else:
+    from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 
 from ..base import BaseEngine, EngineRegistry
 from .utils import create_device_mesh, get_sharding_strategy
@@ -210,9 +221,10 @@ class FSDPEngine(BaseEngine):
 
         from transformers import AutoConfig
 
+        attn_implementation = config.model.get("override_config", {}).get("attn_implementation", "flash_attention_2")
         model_config = AutoConfig.from_pretrained(
             local_path,
-            attn_implementation="flash_attention_2",
+            attn_implementation=attn_implementation,
             trust_remote_code=config.model.get("trust_remote_code", False),
         )
         model_config.num_labels = 1

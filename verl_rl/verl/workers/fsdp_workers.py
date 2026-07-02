@@ -250,8 +250,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
         # override model kwargs
+        attn_implementation = override_model_config.get("attn_implementation", "flash_attention_2")
         actor_model_config = AutoConfig.from_pretrained(
-            local_path, trust_remote_code=trust_remote_code, attn_implementation="flash_attention_2"
+            local_path, trust_remote_code=trust_remote_code, attn_implementation=attn_implementation
         )
 
         # patch for kimi-vl
@@ -1012,9 +1013,10 @@ class CriticWorker(Worker, DistProfilerExtension):
 
         from transformers import AutoConfig
 
+        attn_implementation = override_config.get("attn_implementation", "flash_attention_2")
         critic_model_config = AutoConfig.from_pretrained(
             local_path,
-            attn_implementation="flash_attention_2",
+            attn_implementation=attn_implementation,
             trust_remote_code=config.model.get("trust_remote_code", False),
         )
         critic_model_config.num_labels = 1
@@ -1372,11 +1374,12 @@ class RewardModelWorker(Worker, DistProfilerExtension):
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
             model_config.classifier_dropout = 0.0
+            attn_implementation = config.model.get("override_config", {}).get("attn_implementation", "flash_attention_2")
             reward_module = AutoModelForTokenClassification.from_pretrained(
                 pretrained_model_name_or_path=local_path,
                 config=model_config,
                 torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
+                attn_implementation=attn_implementation,
                 trust_remote_code=trust_remote_code,
             )
 
@@ -1429,14 +1432,30 @@ class RewardModelWorker(Worker, DistProfilerExtension):
 
     def _forward_micro_batch(self, micro_batch):
         if is_cuda_available:
-            from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+            try:
+                from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+            except ImportError:
+                try:
+                    from transformers.integrations.npu_flash_attention import (
+                        index_first_axis,
+                        pad_input,
+                        rearrange,
+                        unpad_input,
+                    )
+                except ImportError:
+                    from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
         elif is_npu_available:
-            from transformers.integrations.npu_flash_attention import (
-                index_first_axis,
-                pad_input,
-                rearrange,
-                unpad_input,
-            )
+            try:
+                from transformers.integrations.npu_flash_attention import (
+                    index_first_axis,
+                    pad_input,
+                    rearrange,
+                    unpad_input,
+                )
+            except ImportError:
+                from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
+        else:
+            from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 
         from verl.utils.ulysses import gather_outputs_and_unpad, ulysses_pad_and_slice_inputs
 

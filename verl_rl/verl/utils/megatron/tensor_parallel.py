@@ -170,7 +170,10 @@ def vocab_parallel_log_probs_from_logits_response_rmpad(input_ids, attention_mas
         response_length: int
 
     """
-    from flash_attn.bert_padding import pad_input, unpad_input
+    try:
+        from flash_attn.bert_padding import pad_input, unpad_input
+    except ImportError:
+        from verl.utils.flash_attn_fallback import pad_input, unpad_input
 
     batch_size, seqlen = input_ids.shape
     input_ids_rmpad, indices, *_ = unpad_input(input_ids.unsqueeze(-1), attention_mask=attention_mask)

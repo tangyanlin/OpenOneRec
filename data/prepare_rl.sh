@@ -16,7 +16,7 @@ LABEL_COND_REC=${REC_DATA_PATH}/sft_label_cond_rec.parquet
 
 # Output configuration
 OUTPUT_DIR="../output/rl_data"
-TEST_SIZE=1000
+TEST_SIZE=100
 SEED=42
 ENGINE="pyarrow"
 
@@ -25,11 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Define all task files to process
 declare -a TASK_FILES=(
-    "${VIDEO_REC}"
     "${AD_REC}"
-    "${PRODUCT_REC}"
-    "${INTERACTIVE_REC}"
-    "${LABEL_COND_REC}"
 )
 
 # Check if input files exist

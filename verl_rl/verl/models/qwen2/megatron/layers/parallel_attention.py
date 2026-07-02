@@ -28,8 +28,12 @@ from transformers.utils import is_flash_attn_2_available
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+    from flash_attn.layers.rotary import apply_rotary_emb
+else:
+    from verl.utils.flash_attn_fallback import (
+        apply_rotary_emb, flash_attn_varlen_func, index_first_axis, pad_input, unpad_input,
+    )
 import torch
-from flash_attn.layers.rotary import apply_rotary_emb
 from megatron.core import ModelParallelConfig, tensor_parallel
 from megatron.core import parallel_state as mpu
 from torch import nn

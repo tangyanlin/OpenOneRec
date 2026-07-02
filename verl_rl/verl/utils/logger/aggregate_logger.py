@@ -38,16 +38,19 @@ class LocalLogger:
 
     Args:
         print_to_console (bool): Whether to print to the console.
+        log_interval (int): Print to console every `log_interval` steps. Default is 1 (every step).
+            Set to a larger value (e.g., 1000) to reduce console output frequency.
     """
 
-    def __init__(self, print_to_console=True):
+    def __init__(self, print_to_console=True, log_interval=1):
         self.print_to_console = print_to_console
+        self.log_interval = max(1, int(log_interval))
 
     def flush(self):
         pass
 
     def log(self, data, step):
-        if self.print_to_console:
+        if self.print_to_console and step % self.log_interval == 0:
             print(concat_dict_to_str(data, step=step), flush=True)
 
 

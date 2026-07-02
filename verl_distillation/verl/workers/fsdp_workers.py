@@ -308,7 +308,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
         # override model kwargs
-        attn_implementation = override_model_config.get("attn_implementation", "flash_attention_2")
+        attn_implementation = override_model_config.get("attn_implementation", "sdpa")
         actor_model_config = AutoConfig.from_pretrained(
             local_path, trust_remote_code=trust_remote_code, attn_implementation=attn_implementation
         )
@@ -1009,6 +1009,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         data.meta_info["temperature"] = self.config.rollout.temperature
         data.meta_info["max_token_len"] = self.config.ref.log_prob_max_token_len_per_gpu
         data.meta_info["use_dynamic_bsz"] = self.config.ref.log_prob_use_dynamic_bsz
+        data.meta_info["extend_vocab_start_token"] = self.config.rollout.get("extend_vocab_start_token", None)
         with self.ulysses_sharding_manager:
             data = data.to("cpu")  # data will to device with each micro batch on ref.compute_log_prob
             output, _ = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False, mask_special_token=True)
