@@ -320,16 +320,33 @@ class DataParallelPPOActor(BasePPOActor):
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
-        if mask_special_token:
+        has_distill_special_token_mask = "distill_special_token_mask" in data.batch.keys()
+        if mask_special_token and has_distill_special_token_mask:
             select_keys.append("distill_special_token_mask")
         non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
+
+        # When mask_special_token=True (ref/teacher model), replace all extended vocab tokens
+        # (ID >= extend_vocab_start_token) with EOS token (151645) BEFORE select(), to prevent
+        # out-of-bounds embedding access in the teacher model which has a smaller vocab_size.
+        # This must be done before select() because select() may return a TensorDict view
+        # whose in-place modifications may not reliably propagate to micro_batches.
+        extend_vocab_start_token = data.meta_info.get("extend_vocab_start_token", None)
+        if mask_special_token and extend_vocab_start_token is not None:
+            # Replace ALL tokens >= extend_vocab_start_token with EOS (151645)
+            # This covers both prompt and response portions.
+            extend_token_mask = data.batch["input_ids"] >= extend_vocab_start_token
+            data.batch["input_ids"] = torch.where(extend_token_mask, 151645, data.batch["input_ids"])
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
         
         # replace distill_special_token to EOS, the token behind the first distill_speical_token will be masked.
-        if mask_special_token:
+        # Note: extended vocab tokens have already been replaced above, so this mainly handles
+        # the distill_special_token_mask for log_prob masking purposes.
+        if mask_special_token and has_distill_special_token_mask:
             distill_special_token_mask = torch.zeros_like(data.batch["attention_mask"])
             distill_special_token_mask[:,-len(data.batch["distill_special_token_mask"][0]):] = data.batch["distill_special_token_mask"]
+            # The input_ids replacement for distill tokens is already done above via extend_vocab_start_token,
+            # but we keep this for backward compatibility in case extend_vocab_start_token is not set.
             data.batch["input_ids"][distill_special_token_mask == 1] = 151645
 
         if use_dynamic_bsz:
@@ -361,7 +378,7 @@ class DataParallelPPOActor(BasePPOActor):
             if calculate_entropy:
                 entropys = restore_dynamic_batch(entropys, batch_idx_list)
 
-        if mask_special_token:
+        if mask_special_token and has_distill_special_token_mask:
             log_probs[data.batch["distill_special_token_mask"] == 1] = self.config.ref_log_prob_replace_val
         return log_probs, entropys
 

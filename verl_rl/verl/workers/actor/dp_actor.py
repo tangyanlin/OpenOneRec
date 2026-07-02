@@ -37,9 +37,20 @@ from verl.utils.ulysses import gather_outputs_and_unpad, ulysses_pad, ulysses_pa
 from verl.workers.actor import BasePPOActor
 
 if is_cuda_available:
-    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    try:
+        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    except ImportError:
+        try:
+            from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+        except ImportError:
+            from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 elif is_npu_available:
-    from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    try:
+        from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    except ImportError:
+        from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
+else:
+    from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 
 
 __all__ = ["DataParallelPPOActor"]

@@ -224,25 +224,26 @@ class RayOnPolicyDistillTrainer(RayPPOTrainer):
 
 
                     # Log rollout generations if enabled
-                    rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
-                    if rollout_data_dir:
-                        with marked_timer("dump_rollout_generations", timing_raw, color="green"):
-                            inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
-                            outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
-                            INVALID_FIELDS = ['score','index','uid','__num_turns__','multi_modal_inputs',
-                                            'sample_reward', "raw_prompt"]
-                            extra_infos = {}
-                            for key in batch.non_tensor_batch.keys():
-                                if key not in INVALID_FIELDS:
-                                    extra_infos[key] = batch.non_tensor_batch[key].tolist()
-                            self._dump_generations(
-                            inputs=inputs,
-                            outputs=outputs,
-                            scores=[0 for _ in range(len(outputs))],
-                            reward_extra_infos_dict=extra_infos,
-                            dump_path=rollout_data_dir,
-                            logger=logger,
-                            )
+                    # DISABLED: dump jsonl operation is skipped to avoid unnecessary I/O
+                    # rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+                    # if rollout_data_dir:
+                    #     with marked_timer("dump_rollout_generations", timing_raw, color="green"):
+                    #         inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
+                    #         outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+                    #         INVALID_FIELDS = ['score','index','uid','__num_turns__','multi_modal_inputs',
+                    #                         'sample_reward', "raw_prompt"]
+                    #         extra_infos = {}
+                    #         for key in batch.non_tensor_batch.keys():
+                    #             if key not in INVALID_FIELDS:
+                    #                 extra_infos[key] = batch.non_tensor_batch[key].tolist()
+                    #         self._dump_generations(
+                    #         inputs=inputs,
+                    #         outputs=outputs,
+                    #         scores=[0 for _ in range(len(outputs))],
+                    #         reward_extra_infos_dict=extra_infos,
+                    #         dump_path=rollout_data_dir,
+                    #         logger=logger,
+                    #         )
 
                 # validate
                 if (

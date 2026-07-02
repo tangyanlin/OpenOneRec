@@ -74,9 +74,20 @@ from verl.utils.ulysses import (
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 if is_cuda_available:
-    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    try:
+        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    except ImportError:
+        try:
+            from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+        except ImportError:
+            from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 elif is_npu_available:
-    from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    try:
+        from transformers.integrations.npu_flash_attention import index_first_axis, pad_input, rearrange, unpad_input
+    except ImportError:
+        from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
+else:
+    from verl.utils.flash_attn_fallback import index_first_axis, pad_input, rearrange, unpad_input
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_SFT_LOGGING_LEVEL", "WARN"))
@@ -225,11 +236,12 @@ class FSDPSFTTrainer:
         )
 
         with init_context():
+            attn_implementation = self.config.model.get("override_config", {}).get("attn_implementation", "flash_attention_2")
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 local_model_path,
                 config=config,
                 torch_dtype=torch_dtype,
-                attn_implementation="flash_attention_2",
+                attn_implementation=attn_implementation,
                 trust_remote_code=trust_remote_code,
             )
 

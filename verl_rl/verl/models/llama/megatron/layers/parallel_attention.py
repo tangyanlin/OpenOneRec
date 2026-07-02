@@ -24,7 +24,10 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from flash_attn.layers.rotary import apply_rotary_emb
+try:
+    from flash_attn.layers.rotary import apply_rotary_emb
+except ImportError:
+    from verl.utils.flash_attn_fallback import apply_rotary_emb
 from megatron.core import ModelParallelConfig, tensor_parallel
 from megatron.core import parallel_state as mpu
 from torch import nn
@@ -347,6 +350,10 @@ Remove padding Attention
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+else:
+    from verl.utils.flash_attn_fallback import (
+        flash_attn_varlen_func, index_first_axis, pad_input, unpad_input,
+    )
 
 
 def apply_rotary_pos_emb_rmpad(q, k, cos, sin, position_ids, indices, sequence_length):

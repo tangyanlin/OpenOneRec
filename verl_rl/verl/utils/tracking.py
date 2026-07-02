@@ -119,9 +119,12 @@ class Tracking:
             self.logger["tensorboard"] = _TensorboardAdapter(project_name, experiment_name)
 
         if "console" in default_backend:
+            import os
+
             from verl.utils.logger import LocalLogger
 
-            self.console_logger = LocalLogger(print_to_console=True)
+            console_log_interval = int(os.environ.get("CONSOLE_LOG_INTERVAL", "1"))
+            self.console_logger = LocalLogger(print_to_console=True, log_interval=console_log_interval)
             self.logger["console"] = self.console_logger
 
         if "clearml" in default_backend:
