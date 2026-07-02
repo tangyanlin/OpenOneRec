@@ -907,6 +907,8 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
     QWEN3_START_DOCSTRING,
 )
 class Qwen3ForSequenceClassification(Qwen3PreTrainedModel):
+    wrap_modules = {Qwen3DecoderLayer}
+
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels

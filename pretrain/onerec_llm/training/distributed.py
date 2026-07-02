@@ -43,7 +43,7 @@ def shard_model(
     if cpu_offload:
         fsdp_kwargs["offload_policy"] = CPUOffloadPolicy()
 
-    if model_class == 'Qwen3ForCausalLM':
+    if model_class in ('Qwen3ForCausalLM', 'Qwen3ForSequenceClassification'):
         layers = list(model.model.layers)
     else:
         raise ValueError(f"Unsupported model_class: {model_class}")
@@ -85,7 +85,14 @@ def load_from_full_model_state_dict(
     
     if dist.get_rank() == 0:
         if use_tie_weights:
-            full_sd['lm_head.weight'] = full_sd['model.embed_tokens.weight']
+            if 'lm_head.weight' in full_sd:
+                full_sd['lm_head.weight'] = full_sd['model.embed_tokens.weight']
+            # Qwen3ForSequenceClassification uses 'score' head, no weight tying
+        
+        # For Qwen3ForSequenceClassification, remove lm_head.weight from checkpoint
+        # (it belongs to CausalLM) and let score.weight be randomly initialized
+        if 'score.weight' in meta_sharded_sd and 'lm_head.weight' in full_sd and 'score.weight' not in full_sd:
+            del full_sd['lm_head.weight']
 
         extra_meta_sharded_sd = set(meta_sharded_sd.keys()) - set(full_sd.keys())
         extra_full_ds = set(full_sd.keys()) - set(meta_sharded_sd.keys())

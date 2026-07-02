@@ -1,6 +1,6 @@
 
 from torchdata.stateful_dataloader import StatefulDataLoader
-from onerec_llm.data.qwen3_dataset import Qwen3ChatCompletionParquetDataset
+from onerec_llm.data.qwen3_dataset import Qwen3ChatCompletionParquetDataset, Qwen3SeqClsParquetDataset
 
 def get_chat_completion_parquet_dataloader(sources: str,
                                           max_length,
@@ -11,7 +11,10 @@ def get_chat_completion_parquet_dataloader(sources: str,
                                           datasource_config={},
                                           **kwargs):
     model_type = kwargs.get('model_class','Qwen3ForCausalLM')
-    ModelDataset = {'Qwen3ForCausalLM': Qwen3ChatCompletionParquetDataset}
+    ModelDataset = {
+        'Qwen3ForCausalLM': Qwen3ChatCompletionParquetDataset,
+        'Qwen3ForSequenceClassification': Qwen3SeqClsParquetDataset,
+    }
     num_readers = kwargs.get("num_readers", 1)
     shuffle_window = kwargs.get("shuffle_window", 0)
 
